@@ -377,6 +377,57 @@ def pdmCoherentReceiver(Es, Elo, θsig=0, paramPD=[]):
     return np.array([Sx, Sy]).T
 
 
+def SEReceiver(Es, Elo, paramPD=[], paramEqSSBI=[]):
+    """
+    Single polarization single-ended coherent receiver.
+
+    Parameters
+    ----------
+    Es : np.array
+        Input signal optical field.
+    Elo : np.array
+        Input LO optical field.
+    paramPD : parameter object, optional
+        Parameters of the photodiodes.
+    paramEqSSBI : parameter object, optional
+        Parameters of the SSBI algorithm. (default: 'dfr')
+        - paramEqSSBI.alg: type of algorithm to be used ['none', 'dfr', 'ic', 'gd].
+
+    Returns
+    -------
+    sigOut : np.array
+        Downconverted signal after single-ended receiver and ssbi mitigation block
+
+    """
+    assert Es.shape == (len(Es),), "Es need to have a (N,) shape"
+    assert Elo.shape == (len(Elo),), "Elo need to have a (N,) shape"
+    assert Es.shape == Elo.shape, "Es and Elo need to have the same (N,) shape"
+
+    # optical hybrid transfer matrix
+    T = np.array(
+        [
+            [1 / 2, 1j / 2, 1j / 2, -1 / 2],
+            [1j / 2, -1 / 2, 1 / 2, 1j / 2],
+            [1j / 2, 1 / 2, -1j / 2, -1 / 2],
+            [-1 / 2, 1j / 2, -1 / 2, 1j / 2],
+        ]
+    ) * 2 # Compensation in accordance with the reference article
+
+    Ei = np.array([Es, np.zeros((Es.size,)), np.zeros((Es.size,)), Elo])
+    Eo = T @ Ei
+    
+    R1 = photodiode(Eo[1,:], paramPD) # select SER port
+    R2 = photodiode(Eo[2,:], paramPD) # select SER port
+
+    # SSBI mitigation
+    import importlib
+    eq = importlib.import_module("optic.equalization")
+    mitigationSSBI = getattr(eq, 'mitigationSSBI')
+    sigOut = mitigationSSBI(R1, R2, Es, Elo, paramEqSSBI)
+    
+    return sigOut
+
+
 def edfa(Ei, Fs, G=20, NF=4.5, Fc=193.1e12):
     """
     Implement simple EDFA model.
