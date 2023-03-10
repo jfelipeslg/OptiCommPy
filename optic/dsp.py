@@ -332,3 +332,35 @@ def pnorm(x):
 
     """
     return x / np.sqrt(np.mean(x * np.conj(x)).real)
+
+
+@njit
+def clippingComplex(signal, clippingValue):
+    """
+    Clipping complex signals
+
+    Parameters
+    ----------
+    signal : np.array
+        Input signal without clipping.
+    clippingValue : scalar
+        Input value for clipping.
+
+    Returns
+    -------
+    sigClipped : np.array
+        Output clipped signal.
+
+    """
+    sigClipped = np.zeros(signal.shape, dtype="complex")
+    
+    for idx, idxValue in enumerate(signal):
+        
+        if np.abs(idxValue) > clippingValue:
+            absIdx, angIdx = cmath.polar(idxValue)
+            sigClipped[idx] = cmath.rect(clippingValue, angIdx)
+            
+        else:
+            sigClipped[idx] = idxValue
+        
+    return sigClipped
