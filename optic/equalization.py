@@ -7,9 +7,10 @@ from numba import njit
 from numpy.fft import fft, fftfreq, ifft
 from tqdm.notebook import tqdm
 
-from optic.dsp import pnorm
+from optic.dsp import pnorm, clippingComplex
 from optic.models import linFiberCh
 from optic.modulation import GrayMapping
+from optic.metrics import signal_power
 
 
 def edc(Ei, L, D, Fc, Fs):
@@ -534,3 +535,260 @@ def dbp(Ei, Fs, Ltotal, Lspan, hz=0.5, alpha=0.2, gamma=1.3, D=16, Fc=193.1e12):
     Ech = ifft(Ech)
 
     return Ech.reshape(len(Ech),)
+
+
+@njit
+def DFR(R1, R2, sigLO):
+    """
+    Direct Field Reconstruction (DFR)
+    
+    Algorithm
+    ---------
+    1. Define function delta
+    2. Calculation of in-phase and quadrature components (roots)
+
+    Parameters
+    ----------
+    R1 : np.array
+        Input in-phase component photocurrent.
+    R2 : np.array
+        Input in-quadracture component photocurrent.
+    sigLO : np.array
+        Input local oscillator (LO).
+      
+    Returns
+    -------
+    sigOut : np.array
+        Output signal without interference beat signal-signal (SSBI) using the DFR method.
+
+    """
+    A = sigLO
+    
+    delta = 4*R1*R2 - (R1 + R2 - 2*A**2)**2
+    
+    sigI = - A/2 + 1/(4*A) * (R1 - R2) + 1/(4*A) * np.sqrt(delta)
+    sigQ = - A/2 - 1/(4*A) * (R1 - R2) + 1/(4*A) * np.sqrt(delta)
+      
+    sigOut = sigI + 1j*sigQ
+    
+    return sigOut
+
+
+@njit
+def IC(R1, R2, sigWDM, sigLO, N=20, clipping=True):
+    """
+    Iterative SSBI Cancellation (IC)
+
+    Algorithm
+    ---------
+    1. Change of variables
+    2. Definition of analysis equations
+    3. Initial estimation of signal and error
+    4. Definition of the iterative loop for the estimations.
+
+    Parameters
+    ----------
+    R1 : np.array
+        Input in-phase component photocurrent.
+    R2 : np.array
+        Input in-quadracture component photocurrent.
+    sigWDM : np.array
+        Input received optical signal. 
+    sigLO : np.array
+        Input local oscillator (LO).
+    N : scalar
+        Number of loop repetitions. The default is 20.
+    clipping : bool
+        Clipping status. The default is True.
+      
+    Returns
+    -------
+    sigOut : np.array
+        Output signal without interference beat signal-signal (SSBI) using the IC method.
+
+    """
+    A = sigLO                
+    P = signal_power(sigWDM) 
+    
+    U1 = (R1 - A**2) / (4*A**2) 
+    U2 = (R2 - A**2) / (4*A**2) 
+    
+    overline_I = sigWDM.real / (2*A) 
+    overline_Q = sigWDM.imag / (2*A) 
+        
+    overline_I0 = U1 - P / (4*A**2) 
+    overline_Q0 = U2 - P / (4*A**2) 
+    e0 = overline_I0 - overline_I   
+
+    overline_In = overline_I0 
+    overline_Qn = overline_Q0 
+    error = e0                
+    
+    if clipping == True:
+        LOSPR = 10*np.log10( signal_power(sigLO) / P )                     
+        optimumClip_dB  = LOSPR - 1                                         
+        optimumClip_lin = 10**(optimumClip_dB/10)                           
+        clippingValue   = optimumClip_lin * np.sqrt(signal_power(sigWDM)) 
+
+    for nSteps in range(1, N):
+        reductionSSBI  = (overline_In**2 + overline_Qn**2)      
+        
+        if clipping == True:
+            reductionSSBI  = clippingComplex( reductionSSBI, clippingValue)
+        
+        overline_Inext = U1 - reductionSSBI                     
+        overline_Qnext = U2 - reductionSSBI                     
+        
+        errorNext = - error * (overline_I + overline_Q + overline_In + overline_Qn) 
+                
+        overline_In = overline_Inext 
+        overline_Qn = overline_Qnext 
+        error = errorNext            
+    
+    overline_sigOut = (overline_In + 1j*overline_Qn) 
+    sigOut = (2*A) * overline_sigOut                 
+    
+    return sigOut
+
+
+@njit
+def gradientDescent(R1, R2, sigWDM, sigLO, mu=0.05, N=150, clipping=True):
+    """
+    Gradient Descent (GD)
+
+    Algorithm
+    ---------
+    1. Change of variables
+    2. Equations of the GD algorithm
+    3. Definition of the objective function
+    4. Iterative update for minimizing the objective function.
+
+    Parameters
+    ----------
+    R1 : np.array
+        Input in-phase component photocurrent.
+    R2 : np.array
+        Input in-quadracture component photocurrent.
+    sigWDM : np.array
+        Input received optical signal. 
+    sigLO : np.array
+        Input local oscillator (LO).
+    mu : scalar
+        Convergence step. The default is 0.05.
+    N : scalar
+        Number of loop repetitions. The default is 150.
+    clipping : bool
+        Clipping status. The default is True.
+      
+    Returns
+    -------
+    sigOut : np.array
+        Output signal without interference beat signal-signal (SSBI) using the GD method.
+
+    """
+    A = sigLO                
+    P = signal_power(sigWDM) 
+    
+    U1 = (R1 - A**2) / (4*A**2)
+    U2 = (R2 - A**2) / (4*A**2) 
+    
+    overline_I = sigWDM.real / (2*A) 
+    overline_Q = sigWDM.imag / (2*A) 
+    
+    overline_I0 = U1 - P / (4*A**2) 
+    overline_Q0 = U2 - P / (4*A**2)
+    
+    overline_In = overline_I0 
+    overline_Qn = overline_Q0 
+    
+    if clipping == True:
+        LOSPR = 10*np.log10( signal_power(sigLO) / signal_power(sigWDM) )       
+        optimumClip_dB  = LOSPR + 4                                            
+        optimumClip_lin = 10**(optimumClip_dB/10)                               
+        clippingValueI   = optimumClip_lin * np.sqrt(signal_power(sigWDM.real)) 
+        clippingValueQ   = optimumClip_lin * np.sqrt(signal_power(sigWDM.imag)) 
+    
+    for nSteps in range(1, N):
+               
+        X_InQn = overline_In**2 + overline_Qn**2 + overline_In - U1 
+        Y_InQn = overline_In**2 + overline_Qn**2 + overline_Qn - U2 
+        
+        G = X_InQn ** 2 + Y_InQn ** 2
+            
+        gradientI = (X_InQn * (2*overline_In + 1) + 2 * Y_InQn * overline_In)
+        gradientQ = (X_InQn * overline_Qn + 2 * Y_InQn * (2*overline_Qn + 1)) 
+        
+        if clipping == True:
+            gradientI  = clippingComplex( gradientI, clippingValueI)
+            gradientQ  = clippingComplex( gradientQ, clippingValueQ)
+            
+        overline_Inext = overline_In - mu * gradientI
+        overline_Qnext = overline_Qn - mu * gradientQ
+        
+        error = 2 * np.sqrt( (overline_In - overline_I)**2 + (overline_Qn - overline_Q)**2 )
+        
+        overline_In = overline_Inext
+        overline_Qn = overline_Qnext
+        
+    overline_sigOut = (overline_In + 1j*overline_Qn) 
+    sigOut = (2*A) * overline_sigOut                 
+    
+    return sigOut
+
+
+def mitigationSSBI(R1, R2, sigWDM, sigLO, paramEqSSBI=[]):
+    """
+    SSBI mitigation block
+    
+    Parameters
+    ----------
+    R1 : np.array
+        Input in-phase component photocurrent.
+    R2 : np.array
+        Input in-quadracture component photocurrent.
+    sigWDM : np.array
+        Input received optical signal. 
+    sigLO : np.array
+        Input local oscillator (LO).
+    paramEqSSBI : parameter object, optional
+        Parameters of the SSBI mitigation algorithm.
+      
+    Returns
+    -------
+    sigRx : np.array
+        Output signal without/with interference beat signal-signal (SSBI).
+
+    """
+    alg = getattr(paramEqSSBI, "alg", "dfr").lower()
+    
+    # Algorithm check
+    assert alg in ["none", "dfr", "ic", "gd"], "Invalid SSBI mitigation algorithm."
+    
+    # Direct Field Reconstruction (DFR)
+    if alg == "dfr":
+        sigDFR = DFR(R1, R2, sigLO)
+        sigRx  = sigDFR - np.mean(sigDFR)
+
+    # Iterative SSBI Cancellation (IC)
+    elif alg == "ic":
+        # Check input parameters
+        Nsteps     = getattr(paramEqSSBI, "Nsteps", 20)
+        enableClip = getattr(paramEqSSBI, "enableClip", True)
+        
+        sigRx = IC(R1, R2, sigWDM, sigLO, N=Nsteps, clipping=enableClip)
+    
+    # Gradient Descent (GD)
+    elif alg == "gd":
+        # Check input parameters
+        Nsteps     = getattr(paramEqSSBI, "Nsteps", 150)
+        mu_        = getattr(paramEqSSBI, "mu", 0.05)
+        enableClip = getattr(paramEqSSBI, "enableClip", True)
+        
+        sigRx = gradientDescent(R1, R2, sigWDM, sigLO, mu=mu_, N=Nsteps, clipping=enableClip)
+
+    # Not applied SSBI mitigating algorithm
+    else:
+        sigPD = R1 + 1j*R2
+        sigRx = sigPD - np.mean(sigPD)
+        
+    return sigRx
