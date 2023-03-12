@@ -403,21 +403,12 @@ def SEReceiver(Es, Elo, paramPD=[], paramEqSSBI=[]):
     assert Elo.shape == (len(Elo),), "Elo need to have a (N,) shape"
     assert Es.shape == Elo.shape, "Es and Elo need to have the same (N,) shape"
 
-    # optical hybrid transfer matrix
-    T = np.array(
-        [
-            [1 / 2, 1j / 2, 1j / 2, -1 / 2],
-            [1j / 2, -1 / 2, 1 / 2, 1j / 2],
-            [1j / 2, 1 / 2, -1j / 2, -1 / 2],
-            [-1 / 2, 1j / 2, -1 / 2, 1j / 2],
-        ]
-    ) * 2 # Compensation according to the calculations of the SSBI algorithms
-
-    Ei = np.array([Es, np.zeros((Es.size,)), np.zeros((Es.size,)), Elo])
-    Eo = T @ Ei
+    # optical 2 x 4 90° hybrid
+    Eo = hybrid_2x4_90deg(Es, Elo)
     
-    R1 = photodiode(Eo[1,:], paramPD) # select SER port
-    R2 = photodiode(Eo[2,:], paramPD) # select SER port
+    # single-ended photodetectors
+    R1 = photodiode(2*Eo[1,:], paramPD) # select SER port
+    R2 = photodiode(2*Eo[2,:], paramPD) # select SER port
 
     # SSBI mitigation
     import importlib
