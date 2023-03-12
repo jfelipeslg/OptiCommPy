@@ -390,7 +390,7 @@ def SEReceiver(Es, Elo, paramPD=[], paramEqSSBI=[]):
     paramPD : parameter object, optional
         Parameters of the photodiodes.
     paramEqSSBI : parameter object, optional
-        Parameters of the SSBI algorithm. (default: 'dfr')
+        Parameters of the SSBI algorithm. The default is 'dfr'.
         - paramEqSSBI.alg: type of algorithm to be used ['none', 'dfr', 'ic', 'gd].
 
     Returns
@@ -411,7 +411,7 @@ def SEReceiver(Es, Elo, paramPD=[], paramEqSSBI=[]):
             [1j / 2, 1 / 2, -1j / 2, -1 / 2],
             [-1 / 2, 1j / 2, -1 / 2, 1j / 2],
         ]
-    ) * 2 # Compensation in accordance with the reference article
+    ) * 2 # Compensation according to the calculations of the SSBI algorithms
 
     Ei = np.array([Es, np.zeros((Es.size,)), np.zeros((Es.size,)), Elo])
     Eo = T @ Ei
@@ -426,6 +426,41 @@ def SEReceiver(Es, Elo, paramPD=[], paramEqSSBI=[]):
     sigOut = mitigationSSBI(R1, R2, Es, Elo, paramEqSSBI)
     
     return sigOut
+
+
+def pdmSEReceiver(Es, Elo, θsig=0, paramPD=[], paramEqSSBI=[]):
+    """
+    Polarization multiplexed single-ended coherent receiver.
+
+    Parameters
+    ----------
+    Es : np.array
+        Input signal optical field.
+    Elo : np.array
+        Input LO optical field.
+    θsig : scalar, optional
+        Input polarization rotation angle in rad. The default is 0.
+    paramPD : parameter object, optional
+        Parameters of the photodiodes.
+    paramEqSSBI : parameter object, optional
+        Parameters of the SSBI algorithm. The default is 'dfr'.
+        - paramEqSSBI.alg: type of algorithm to be used ['none', 'dfr', 'ic', 'gd].
+
+    Returns
+    -------
+    sigOut : np.array
+        Downconverted signal after single-ended receiver and ssbi mitigation block
+
+    """
+    assert len(Es) == len(Elo), "Es and Elo need to have the same length"
+    
+    Elox, Eloy = pbs(Elo, θ=np.pi/4 )  # split LO into two orth. polarizations
+    Esx, Esy   = pbs(Es, θ=θsig)       # split signal into two orth. polarizations
+    
+    Sx = SEReceiver(Esx, Elox, paramPD, paramEqSSBI)  # coherent detection of pol.X
+    Sy = SEReceiver(Esy, Eloy, paramPD, paramEqSSBI)  # coherent detection of pol.Y
+
+    return np.array([Sx, Sy]).T
 
 
 def edfa(Ei, Fs, G=20, NF=4.5, Fc=193.1e12):
